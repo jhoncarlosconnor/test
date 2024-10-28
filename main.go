@@ -8,6 +8,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-redis/redis/v8"
 	"github.com/go-playground/validator/v10"
+    "github.com/joho/godotenv"
+    "os"
+    "sort"
 )
 
 type ActivityModel struct {
@@ -28,16 +31,78 @@ var (
 )
 
 func main() {
+
+    _ = godotenv.Load(".env")
 	rdb = redis.NewClient(&redis.Options{
-		Addr: "localhost:6379", // Cambia si es necesario
+		Addr: os.Getenv("URL"),
+        Password: os.Getenv("PASSWORD"),
+		DB:       0,
 	})
 
 	validate = validator.New()
 	r := chi.NewRouter()
 
 	r.Post("/activity", handleActivity)
+    r.Delete("/activity/{id}", deleteActivity)
 
+    fmt.Println("http://localhost:80")
 	http.ListenAndServe(":80", r)
+}
+
+func printAllActivities() {
+	keys, err := rdb.Keys(ctx, "activity:*").Result()
+	if err != nil {
+		fmt.Println("Error getting keys:", err)
+		return
+	}
+
+	var activities []ActivityModel
+	for _, key := range keys {
+		data, err := rdb.Get(ctx, key).Result()
+		if err != nil {
+			fmt.Println("Error getting activity:", err)
+			continue
+		}
+
+		var activity ActivityModel
+		if err := json.Unmarshal([]byte(data), &activity); err != nil {
+			fmt.Println("Error unmarshalling activity:", err)
+			continue
+		}
+		activities = append(activities, activity)
+	}
+
+	// Ordenar las actividades por ID (puedes cambiar la lógica de ordenación según necesites)
+	sort.Slice(activities, func(i, j int) bool {
+		return activities[i].ID < activities[j].ID
+	})
+
+	// Imprimir las actividades
+	fmt.Println("Current Activities:")
+	for _, activity := range activities {
+		fmt.Printf("ID: %d, Action: %s, Date: %s\n", activity.ID, activity.Action, activity.Date)
+	}
+}
+
+func deleteActivity(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	key := fmt.Sprintf("activity:%s", id)
+
+	// Eliminar la actividad de Redis
+	result, err := rdb.Del(ctx, key).Result()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if result == 0 {
+		http.Error(w, `{"code": 500,"data":"Activity not found"}`, http.StatusNotFound)
+		return
+	}
+
+	fmt.Printf("Activity with ID %s deleted\n", id)
+	printAllActivities() 
+    _, _ = w.Write([]byte(`{"code": 200,"data":"Activity remove"}`))
 }
 
 func handleActivity(w http.ResponseWriter, r *http.Request) {
@@ -46,46 +111,40 @@ func handleActivity(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	// Validar el modelo
 	if err := validate.Struct(activity); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	// Verificar si el ID ya existe
 	key := fmt.Sprintf("activity:%d", activity.ID)
 	exists, err := rdb.Exists(ctx, key).Result()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	// Serializar a JSON
 	activityJSON, err := json.Marshal(activity)
 	if err != nil {
-		http.Error(w, "Error serializando la actividad", http.StatusInternalServerError)
+		http.Error(w, `{"code": 500,"data":"Activity error"}`, http.StatusInternalServerError)
 		return
 	}
 
 	if exists > 0 {
-		// Actualizar
 		_, err = rdb.Set(ctx, key, activityJSON, 0).Result()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+        printAllActivities()
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode("Activity updated")
+        _, _ = w.Write([]byte(`{"code": 200,"data":"Activity updated"}`))
 	} else {
-		// Almacenar nuevo
 		_, err = rdb.Set(ctx, key, activityJSON, 0).Result()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+        printAllActivities()
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode("Activity created")
+        _, _ = w.Write([]byte(`{"code": 201,"data":"Activity created"}`))
 	}
 }
 
