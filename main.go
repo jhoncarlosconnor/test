@@ -37,7 +37,7 @@ func main() {
 
 	r.Post("/activity", handleActivity)
 
-	http.ListenAndServe(":8080", r)
+	http.ListenAndServe(":80", r)
 }
 
 func handleActivity(w http.ResponseWriter, r *http.Request) {
